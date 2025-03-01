@@ -1,0 +1,160 @@
+#!/bin/bash
+
+# Путь к конфигурационному файлу
+CONFIG_FILE="$HOME/.config/eznote/config"
+
+# Проверка наличия необходимых утилит
+check_dependencies() {
+    for cmd in rofi; do
+        if ! command -v "$cmd" &> /dev/null; then
+            handle_error "Утилита '$cmd' не установлена."
+        fi
+    done
+}
+
+# Обработка ошибок
+handle_error() {
+    echo "Ошибка: $1"
+    exit 1
+}
+
+# Показать справку
+show_help() {
+    echo "Использование: $(basename "$0") [опции]"
+    echo
+    echo "Опции:"
+    echo "  add       Добавить новый файл в конфигурацию."
+    echo "  remove    Удалить файл из конфигурации."
+    echo "  -h, --help  Показать это сообщение."
+    echo
+    echo "Пример:"
+    echo "  $(basename "$0") add"
+    echo "  $(basename "$0") remove"
+    echo "  $(basename "$0")"
+}
+
+# Создание конфигурационного файла
+create_config_file() {
+    mkdir -p "$(dirname "$CONFIG_FILE")"
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "# Пример конфигурации" > "$CONFIG_FILE"
+        echo "# homework (~/d/doc/homework.txt)" >> "$CONFIG_FILE"
+        echo "# project (~/d/doc/project.txt)" >> "$CONFIG_FILE"
+        echo "Конфигурационный файл создан: $CONFIG_FILE"
+        echo "Пожалуйста, добавьте файлы в конфигурацию."
+        exit 0
+    fi
+}
+
+# Чтение файлов из конфигурационного файла
+read_files() {
+    mapfile -t files < <(grep -v '^\s*#' "$CONFIG_FILE")  # Чтение всех строк, игнорируя комментарии
+}
+
+# Проверка на дубликаты
+check_duplicates() {
+    local name="$1"
+    local path="$2"
+    for file in "${files[@]}"; do
+        if [[ "$file" == "$name ($path)" ]]; then
+            return 0  # Дубликат найден
+        fi
+    done
+    return 1  # Дубликатов нет
+}
+
+# Добавление нового файла в конфигурацию
+add_file() {
+    read -p "Введите имя файла: " name
+    read -p "Введите путь к файлу: " path
+
+    # Проверка на дубликаты
+    if check_duplicates "$name" "$path"; then
+        echo "Ошибка: Файл '$name ($path)' уже существует в конфигурации."
+        return
+    fi
+
+    echo "$name ($path)" >> "$CONFIG_FILE"
+    echo "Файл '$name' добавлен в конфигурацию."
+}
+
+# Удаление файла из конфигурации
+remove_file() {
+    selected_file=$(printf "%s\n" "${files[@]}" | rofi -dmenu -p "Выберите файл для удаления:")
+    if [ -n "$selected_file" ]; then
+        # Создание временного файла для записи оставшихся строк
+        grep -v -F "$selected_file" "$CONFIG_FILE" > "$CONFIG_FILE.tmp"
+        
+        # Проверка, были ли изменения
+        if ! cmp -s "$CONFIG_FILE" "$CONFIG_FILE.tmp"; then
+            mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+            echo "Файл '$selected_file' удален из конфигурации."
+        else
+            rm "$CONFIG_FILE.tmp"
+            echo "Файл '$selected_file' не найден в конфигурации."
+        fi
+    else
+        echo "Удаление отменено."
+    fi
+}
+
+# Отображение меню
+display_menu() {
+    printf "%-20s %s\n" "Имя" "Путь"
+    printf "%-20s %s\n" "----" "----"
+    for file in "${files[@]}"; do
+        printf "%s\n" "$file"  # Отображаем в оригинальном формате
+    done | rofi -dmenu -p "Выберите файл:"
+}
+
+# Основной процесс
+check_dependencies
+create_config_file
+read_files
+
+# Проверка аргументов командной строки
+if [[ "$1" == "add" ]]; then
+    add_file
+    exit 0
+elif [[ "$1" == "remove" ]]; then
+    remove_file
+    exit 0
+elif [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+# Проверка, что конфигурационный файл не пустой
+if [ ${#files[@]} -eq 0 ]; then
+    echo "Конфигурационный файл пуст. Пожалуйста, добавьте файлы в конфигурацию."
+    add_file
+    exit 0
+fi
+
+# Отображение списка файлов и выбор
+selected_file=$(display_menu)
+
+# Проверка, был ли выбран файл
+if [ -n "$selected_file" ]; then
+    # Извлечение имени и пути
+    selected_name="${selected_file%% (*}"  # Имя до первой скобки
+    selected_path="${selected_file#* (}"     # Путь после первой скобки
+    selected_path="${selected_path%)}"       # Удаление закрывающей скобки
+
+    # Заменяем ~ на полный путь к домашнему каталогу перед открытием файла
+    selected_path="${selected_path/#\~/$HOME}"
+
+    # Открытие файла в стандартном текстовом редакторе
+    if [ -f "$selected_path" ]; then
+        echo "Открытие файла: $selected_path с редактором: $EDITOR"
+        if [ -n "$EDITOR" ]; then
+            "$EDITOR" "$selected_path"
+        else
+            nano "$selected_path"  # Запасной вариант
+        fi
+    else
+        echo "Ошибка: Файл '$selected_path' не существует."
+    fi
+else
+    echo "Файл не был выбран."
+fi
